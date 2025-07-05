@@ -1,0 +1,244 @@
+import random
+import numpy as np
+
+REWARDS = {
+    'OURO': 1000,
+    'RETORNOU_COM_OURO': 500,
+    'MATOU_WUMPUS': 200,
+    'MOVIMENTO': -1,
+    'PERCEPCAO': -2,
+    'PAREDE': -10,
+    'BURACO': -1000,
+    'WUMPUS': -1000,
+    'FLECHA_PERDIDA': -50,
+    'SAIU_SEM_OURO': -200
+}
+
+class SARSAAgent:
+    def __init__(self, n, actions, alpha=0.1, gamma=0.9, epsilon=0.2):
+        self.q_table = {}
+        self.alpha = alpha  
+        self.gamma = gamma
+        self.epsilon = epsilon  
+        self.actions = actions  
+        self.n = n  
+
+    def get_state(self, pos, percepcoes):
+        linha, coluna = pos
+        return (linha, coluna, *percepcoes)  
+    
+    def choose_action(self, state):
+        if random.random() < self.epsilon or state not in self.q_table:
+            return random.choice(self.actions)
+        return max(self.q_table[state], key=self.q_table[state].get)
+
+    def update_q_value(self, state, action, reward, next_state, next_action):
+        if state not in self.q_table:
+            self.q_table[state] = {a: 0.0 for a in self.actions}
+        if next_state not in self.q_table:
+            self.q_table[next_state] = {a: 0.0 for a in self.actions}
+        
+        current_q = self.q_table[state][action]
+        next_q = self.q_table[next_state][next_action] if not next_action is None else 0
+        self.q_table[state][action] = current_q + self.alpha * (reward + self.gamma * next_q - current_q)
+
+def gerar_matriz(n):
+    return [["_" for _ in range(n)] for _ in range(n)]
+
+def set_wumpus(matriz, n):
+    matriz[0][0] = "A"  
+    while True:
+        linha = random.randint(1, n - 1)
+        coluna = random.randint(1, n - 1)
+        if matriz[linha][coluna] == "_":
+            matriz[linha][coluna] = "W"
+            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+                l, c = linha + dx, coluna + dy
+                if 0 <= l < n and 0 <= c < n and matriz[l][c] == "_":
+                    matriz[l][c] = "f"
+            break
+
+def set_buraco(matriz, n, qtd=3):
+    count = 0
+    while count < qtd:
+        linha = random.randint(1, n - 1)
+        coluna = random.randint(1, n - 1)
+        if matriz[linha][coluna] == "_":
+            matriz[linha][coluna] = 'B'
+            count += 1
+            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+                l, c = linha + dx, coluna + dy
+                if 0 <= l < n and 0 <= c < n:
+                    if matriz[l][c] == "_":
+                        matriz[l][c] = "b"
+                    elif matriz[l][c] == "f":
+                        matriz[l][c] = "bf"
+
+def set_ouro(matriz, n):
+    while True:
+        linha = random.randint(1, n - 1)
+        coluna = random.randint(1, n - 1)
+        if matriz[linha][coluna] == "_":
+            matriz[linha][coluna] = "O"
+            return (linha, coluna)
+
+def encontrar_agente(matriz, n):
+    for i in range(n):
+        for j in range(n):
+            if matriz[i][j] == "A":
+                return (i, j)
+    return None
+
+def get_percepcoes(matriz, pos, n):
+    linha, coluna = pos
+    percepcoes = [False, False]
+    
+    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+        l, c = linha + dx, coluna + dy
+        if 0 <= l < n and 0 <= c < n:
+            if 'b' in matriz[l][c]:
+                percepcoes[0] = True
+            if 'f' in matriz[l][c]:
+                percepcoes[1] = True
+                
+    return percepcoes
+
+def simular_treinamento(episodios=1000, tamanho=4):
+    actions = ["w", "s", "a", "d", "g", "fw", "fs", "fa", "fd"]
+    agent = SARSAAgent(tamanho, actions, epsilon=0.3)
+    
+    for ep in range(episodios):
+        matriz = gerar_matriz(tamanho)
+        set_wumpus(matriz, tamanho)
+        set_buraco(matriz, tamanho)
+        pos_ouro = set_ouro(matriz, tamanho)
+        done = False
+        tem_ouro = False
+        flecha = 1     
+        pos = encontrar_agente(matriz, tamanho)
+        percepcoes = get_percepcoes(matriz, pos, tamanho)
+        state = agent.get_state(pos, percepcoes)
+        action = agent.choose_action(state)
+        
+        while not done:
+            if action in ["w", "s", "a", "d"]:
+                reward, done = executar_movimento(agent, matriz, tamanho, pos, action)
+            elif action == "g":
+                reward, done = executar_pegar_ouro(matriz, pos, pos_ouro)
+                if reward == REWARDS['OURO']:
+                    tem_ouro = True
+            elif action.startswith("f"):
+                reward, done, flecha = executar_atirar(agent, matriz, tamanho, pos, action[1], flecha)           
+            if tem_ouro and pos == (0, 0):
+                reward += REWARDS['RETORNOU_COM_OURO']
+                done = True
+            new_pos = encontrar_agente(matriz, tamanho)
+            new_percepcoes = get_percepcoes(matriz, new_pos, tamanho)
+            next_state = agent.get_state(new_pos, new_percepcoes)
+            next_action = None if done else agent.choose_action(next_state)    
+            agent.update_q_value(state, action, reward, next_state, next_action)
+            state, action = next_state, next_action
+            pos = new_pos
+            agent.epsilon = max(0.01, agent.epsilon * 0.995)
+    
+    print(f"Treinamento completo com SARSA! Q-table com {len(agent.q_table)} estados.")
+    return agent
+
+def executar_movimento(agent, matriz, n, pos, action):
+    linha, coluna = pos
+    nova_linha, nova_coluna = linha, coluna    
+    movs = {"w": (-1,0), "s": (1,0), "a": (0,-1), "d": (0,1)}
+    dx, dy = movs[action]
+    nova_linha += dx
+    nova_coluna += dy
+    
+    if not (0 <= nova_linha < n and 0 <= nova_coluna < n):
+        return REWARDS['PAREDE'], False
+    
+    destino = matriz[nova_linha][nova_coluna]
+    
+    if destino == "W":
+        return REWARDS['WUMPUS'], True
+    elif destino == "B":
+        return REWARDS['BURACO'], True
+    elif destino == "O":
+        return REWARDS['OURO'], True
+    else:
+        matriz[linha][coluna] = "_"
+        matriz[nova_linha][nova_coluna] = "A"
+        
+        percepcoes = get_percepcoes(matriz, (nova_linha, nova_coluna), n)
+        if any(percepcoes):
+            return REWARDS['PERCEPCAO'], False
+        return REWARDS['MOVIMENTO'], False
+
+def executar_pegar_ouro(matriz, pos, pos_ouro):
+    if pos == pos_ouro:
+        matriz[pos[0]][pos[1]] = "A"  
+        return REWARDS['OURO'], True
+    return 0, False
+
+def executar_atirar(agent, matriz, n, pos, direcao, flecha):
+    if flecha <= 0:
+        return REWARDS['FLECHA_PERDIDA'], False, flecha
+    
+    linha, coluna = pos
+    movs = {"w": (-1,0), "s": (1,0), "a": (0,-1), "d": (0,1)}
+    dx, dy = movs[direcao]
+    alvo_linha, alvo_coluna = linha + dx, coluna + dy
+    
+    if 0 <= alvo_linha < n and 0 <= alvo_coluna < n:
+        if matriz[alvo_linha][alvo_coluna] == "W":
+            matriz[alvo_linha][alvo_coluna] = "X" 
+            return REWARDS['MATOU_WUMPUS'], False, flecha - 1
+    
+    return REWARDS['FLECHA_PERDIDA'], False, flecha - 1
+def testar_agente(agent, tamanho=4):
+    matriz = gerar_matriz(tamanho)
+    set_wumpus(matriz, tamanho)
+    set_buraco(matriz, tamanho)
+    pos_ouro = set_ouro(matriz, tamanho)
+        
+    done = False
+    tem_ouro = False
+    flecha = 1
+    passos = 0
+    
+    while not done and passos < 100:
+        passos += 1
+        pos = encontrar_agente(matriz, tamanho)
+        percepcoes = get_percepcoes(matriz, pos, tamanho)
+        state = agent.get_state(pos, percepcoes)
+        action = agent.choose_action(state)
+        
+        print(f"Posição: {pos} | Ação: {action} | Brisa: {percepcoes[0]} | Fedor: {percepcoes[1]}")
+        
+        if action in ["w", "s", "a", "d"]:
+            reward, done = executar_movimento(agent, matriz, tamanho, pos, action)
+            print(f"Movimento: {action} -> {reward}")
+        elif action == "g":
+            reward, done = executar_pegar_ouro(matriz, pos, pos_ouro)
+            if reward == REWARDS['OURO']:
+                tem_ouro = True
+                print("OURO PEGO!")
+        elif action.startswith("f"):
+            reward, done, flecha = executar_atirar(agent, matriz, tamanho, pos, action[1], flecha)
+            print(f"Atirou {action} -> {reward}")
+        
+        if tem_ouro and pos == (0, 0):
+            print("RETORNOU COM O OURO! VITÓRIA!")
+            done = True
+        
+        if done:
+            print("Fim do episódio!")
+            break
+if __name__ == "__main__":
+    print("=== Mundo de Wumpus com SARSA ===")
+    tamanho = int(input("Tamanho do tabuleiro (>=4): ") or 4)
+    episodios = int(input("Número de episódios de treinamento: ") or 100)
+    
+    print("\nTreinando agente com SARSA...")
+    agente = simular_treinamento(episodios, tamanho)
+    
+    print("\nTestando agente treinado...")
+    testar_agente(agente, tamanho)
